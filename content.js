@@ -1,10 +1,9 @@
 /**
- * QA Bug Hunter & Visual Assistant - Content Script v1.2.0
- * Trained for AcademyBugs and live paid cycles:
- * - Real-time Click & Interaction Crash Interceptor
- * - Media & Broken Video/Image Scanner
- * - Broken Pricing & Currency Scanner (e.g. "$$25", "$0.00")
- * - Deep Page Auditor button for 1-click full-page scans
+ * QA Bug Hunter & Visual Assistant - Content Script v1.3.0
+ * Smart Filters:
+ * - Automatically filters out JS toggles (country selectors, modals, dropdowns) using href="#"
+ * - Groups multiple empty links into ONE consolidated report to prevent uTest "Bug Splitting"
+ * - Prioritizes high-value bugs (Math, Broken Assets, Crashes)
  */
 
 (function () {
@@ -37,6 +36,7 @@
     if (path.includes('find-bugs') || title.includes('Find Bugs')) return 'Find Bugs Store';
     if (path.includes('cart') || path.includes('bag')) return 'Cart & Checkout';
     if (path.includes('reward')) return 'Rewards Page';
+    if (path.includes('gaming')) return 'Gaming Page';
     if (path.includes('product') || document.querySelector('.product-detail')) return 'Product Details Page';
     if (path.length <= 1) return 'Homepage';
     return 'Store Page';
@@ -95,14 +95,11 @@
     });
   });
 
-  // Track button/link clicks that fail or throw
   document.addEventListener('click', (e) => {
     const target = e.target.closest('button, a, input[type="submit"], [role="button"]');
     if (!target || target.closest('#qa-bug-hunter-root')) return;
 
     const btnText = (target.innerText || target.getAttribute('aria-label') || target.title || 'Button').trim();
-    
-    // Check if target is a broken social share button
     const href = target.getAttribute('href') || '';
     if (href.includes('twitter.com/share') || href.includes('facebook.com/sharer') || href.includes('pinterest.com/pin')) {
       if (href.includes('example.com') || href === '#' || href.includes('null') || href.includes('undefined')) {
@@ -136,7 +133,6 @@
       if (!text || text.length < 2) continue;
       if (node.parentElement?.closest('#qa-bug-hunter-root')) continue;
 
-      // Bug: Double dollar signs (e.g. "$$25.00")
       if (/\$\s*\$[\d,]+/.test(text)) {
         const prodName = getNearbyName(node.parentElement) || 'Product';
         addBug({
@@ -162,7 +158,6 @@
   // 3. Media, Broken Images & Video Scanner
   // -------------------------------------------------------------
   function checkMediaBugs() {
-    // Images
     document.querySelectorAll('img').forEach((img) => {
       if (img.closest('#qa-bug-hunter-root')) return;
       const src = (img.src || '').toLowerCase();
@@ -180,7 +175,6 @@
         (rect.width <= 8 && rect.height <= 8)
       ) return;
 
-      // Placeholder / No Image
       if (src.includes('no-image') || src.includes('noimage') || src.includes('placeholder') || alt.includes('no image')) {
         const name = getNearbyName(img) || 'Product';
         addBug({
@@ -201,7 +195,6 @@
         return;
       }
 
-      // Broken 404 image
       if (img.complete && img.naturalWidth === 0 && img.src && !img.src.startsWith('data:')) {
         const name = getNearbyName(img) || 'Product';
         addBug({
@@ -222,11 +215,10 @@
       }
     });
 
-    // Videos
     document.querySelectorAll('video').forEach((vid) => {
       if (vid.closest('#qa-bug-hunter-root')) return;
       const src = vid.src || vid.querySelector('source')?.src || '';
-      if (!src || src.includes('example.com') || src.endsWith('.mp4') === false && src.length < 5) {
+      if (!src || src.includes('example.com') || (src.endsWith('.mp4') === false && src.length < 5)) {
         addBug({
           type: 'Functional',
           area: PAGE_AREA,
@@ -286,35 +278,98 @@
   }
 
   // -------------------------------------------------------------
-  // 5. Dead Links Checker
+  // 5. Smart Links Checker (Ignores JS Modals & Groups Dead Links)
   // -------------------------------------------------------------
   function checkDeadLinks() {
+    const brokenLinks = [];
+
     document.querySelectorAll('a[href]').forEach((a) => {
       if (a.closest('#qa-bug-hunter-root')) return;
-      const href = a.getAttribute('href');
-      const text = (a.innerText || a.getAttribute('aria-label') || 'Link').trim().replace(/\s+/g, ' ');
 
+      const href = (a.getAttribute('href') || '').trim();
+      const text = (a.innerText || a.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ');
+      const classes = (a.className || '').toLowerCase();
+
+      // Ignore standard JS UI toggles (Country selector, modals, dropdowns, accordions)
+      const isUiToggle =
+        a.getAttribute('data-toggle') ||
+        a.getAttribute('data-target') ||
+        a.getAttribute('aria-haspopup') ||
+        a.getAttribute('aria-expanded') ||
+        a.getAttribute('role') === 'button' ||
+        classes.includes('modal') ||
+        classes.includes('popup') ||
+        classes.includes('dropdown') ||
+        classes.includes('toggle') ||
+        classes.includes('accordion') ||
+        classes.includes('country') ||
+        classes.includes('lang') ||
+        a.onclick !== null;
+
+      if (isUiToggle) return;
+
+      // Check for empty or broken targets
       if (href === '' || href === '#' || href === 'javascript:void(0)') {
-        if (!a.onclick && !a.getAttribute('role')) {
-          addBug({
-            type: 'Functional',
-            area: PAGE_AREA,
-            title: `Interactive link "${text.substring(0, 30)}" contains empty href and fails to navigate`,
-            steps: [
-              `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
-              `Navigate to: ${CURRENT_URL}`,
-              `Locate the link labeled "${text.substring(0, 35)}"`,
-              `Click on the link`,
-              `Observe browser navigation`
-            ],
-            expected: `Clicking the link should navigate the user to the corresponding destination page.`,
-            actual: `The link has an empty href target (href="${href}") and does not navigate or perform any action when clicked.`,
-            element: a,
-            severity: 'Low'
-          });
+        if (text.length > 1) {
+          brokenLinks.push({ el: a, text });
         }
+      } else if (href.includes('localhost') || href.includes('staging.')) {
+        addBug({
+          type: 'Functional',
+          area: PAGE_AREA,
+          title: `Link "${text.substring(0, 30)}" points to internal test domain (${href})`,
+          steps: [
+            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
+            `Navigate to: ${CURRENT_URL}`,
+            `Locate the link labeled "${text.substring(0, 30)}"`,
+            `Observe destination target`
+          ],
+          expected: 'All links on production should point to live production domains.',
+          actual: `Link points to internal/staging URL: ${href}`,
+          element: a,
+          severity: 'High'
+        });
       }
     });
+
+    // Group multiple empty links into ONE consolidated report to prevent "Bug Splitting"
+    if (brokenLinks.length === 1) {
+      const item = brokenLinks[0];
+      addBug({
+        type: 'Functional',
+        area: PAGE_AREA,
+        title: `Interactive link "${item.text.substring(0, 30)}" contains empty href and fails to navigate`,
+        steps: [
+          `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
+          `Navigate to: ${CURRENT_URL}`,
+          `Locate the link labeled "${item.text.substring(0, 35)}"`,
+          `Click on the link`,
+          `Observe browser navigation`
+        ],
+        expected: `Clicking the link should navigate the user to the corresponding destination page.`,
+        actual: `The link has an empty href target (href="#") and does not navigate when clicked.`,
+        element: item.el,
+        severity: 'Low'
+      });
+    } else if (brokenLinks.length > 1) {
+      const sampleNames = brokenLinks.slice(0, 3).map(b => `"${b.text.substring(0, 20)}"`).join(', ');
+      addBug({
+        type: 'Functional',
+        area: PAGE_AREA,
+        title: `Multiple navigation links (${sampleNames}) contain empty href="#" placeholder targets`,
+        steps: [
+          `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
+          `Navigate to: ${CURRENT_URL}`,
+          `Locate the links on the page: ${sampleNames}`,
+          `Click on the links`,
+          `Observe that none of them navigate`
+        ],
+        expected: `All interactive links should lead to valid destination pages.`,
+        actual: `Multiple links on the page contain placeholder targets (href="#") and fail to navigate when clicked.`,
+        element: brokenLinks[0].el,
+        severity: 'Low'
+      });
+    }
   }
 
   // -------------------------------------------------------------
@@ -372,7 +427,7 @@
         <div class="qa-drawer-body">
           ${
             bugCount === 0
-              ? '<p class="qa-empty">No bugs detected yet. Click "⚡ Deep Scan" or interact with elements, filters, and buttons!</p>'
+              ? '<p class="qa-empty">No user-visible bugs found on this page. Continue exploring!</p>'
               : state.bugs
                   .map(
                     (b, i) => `
