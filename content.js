@@ -1,9 +1,11 @@
 /**
- * QA Bug Hunter & Visual Assistant - Content Script v1.3.0
- * Smart Filters:
- * - Automatically filters out JS toggles (country selectors, modals, dropdowns) using href="#"
- * - Groups multiple empty links into ONE consolidated report to prevent uTest "Bug Splitting"
- * - Prioritizes high-value bugs (Math, Broken Assets, Crashes)
+ * QA Bug Hunter & Visual Assistant - Content Script v1.4.0
+ * Features:
+ * - 🛡️ Built-in Out-of-Scope (OOS) Shield: Detects and warns about Contact Us, Careers, Corporate, and external domains.
+ * - Prevents TTL rejections for Out of Scope areas.
+ * - Extracts nearby product names for missing asset bugs.
+ * - Smart UI toggle filter (ignores dropdowns/language selectors).
+ * - Full uTest formatting.
  */
 
 (function () {
@@ -12,11 +14,14 @@
 
   const state = {
     bugs: [],
+    isOOS: false,
+    oosReason: '',
     settings: {
       checkMath: true,
       checkContent: true,
       checkMedia: true,
       checkLinks: true,
+      oosShield: true,
       highContrast: true
     }
   };
@@ -30,6 +35,33 @@
     return os;
   }
 
+  // -------------------------------------------------------------
+  // 🛡️ Out of Scope (OOS) Detector
+  // -------------------------------------------------------------
+  const OOS_RULES = [
+    { regex: /contact|customer-service-contact|send-message|call-us|email-us/i, label: 'Contact Us / Customer Service (Usually OOS)' },
+    { regex: /careers|jobs|recruitment|work-with-us/i, label: 'Careers & Recruitment (External / OOS)' },
+    { regex: /about-group|corporate|investor|press-release|clarinsgroup/i, label: 'Corporate / Partner Site (External / OOS)' },
+    { regex: /terms-of-use|privacy-policy|legal|cookie-policy/i, label: 'Legal & Privacy Policies (Usually OOS)' }
+  ];
+
+  function evaluateOOS() {
+    const url = window.location.href.toLowerCase();
+    const path = window.location.pathname.toLowerCase();
+
+    for (const rule of OOS_RULES) {
+      if (rule.regex.test(url) || rule.regex.test(path)) {
+        state.isOOS = true;
+        state.oosReason = rule.label;
+        return;
+      }
+    }
+    state.isOOS = false;
+    state.oosReason = '';
+  }
+
+  evaluateOOS();
+
   function getPageArea() {
     const path = window.location.pathname.toLowerCase();
     const title = document.title || '';
@@ -37,9 +69,10 @@
     if (path.includes('cart') || path.includes('bag')) return 'Cart & Checkout';
     if (path.includes('reward')) return 'Rewards Page';
     if (path.includes('gaming')) return 'Gaming Page';
+    if (path.includes('contact')) return 'Contact Us';
     if (path.includes('product') || document.querySelector('.product-detail')) return 'Product Details Page';
     if (path.length <= 1) return 'Homepage';
-    return 'Store Page';
+    return 'Catalog Page';
   }
 
   const BASE_URL = window.location.origin;
@@ -72,7 +105,7 @@
   }
 
   // -------------------------------------------------------------
-  // 1. Crash & Interaction Listener
+  // 1. Crash Listener
   // -------------------------------------------------------------
   window.addEventListener('error', (event) => {
     const file = event.filename || '';
@@ -85,77 +118,18 @@
       steps: [
         `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
         `Navigate to: ${CURRENT_URL}`,
-        `Perform normal button click or dropdown action`,
+        `Interact with page elements or click buttons`,
         `Observe the browser response`
       ],
-      expected: 'Interactive elements should execute properly without JavaScript console exceptions.',
+      expected: 'Page scripts should execute smoothly without unhandled exceptions.',
       actual: `JavaScript runtime exception: "${event.message}" at ${file}:${event.lineno || 0}.`,
       element: null,
       severity: 'Critical'
     });
   });
 
-  document.addEventListener('click', (e) => {
-    const target = e.target.closest('button, a, input[type="submit"], [role="button"]');
-    if (!target || target.closest('#qa-bug-hunter-root')) return;
-
-    const btnText = (target.innerText || target.getAttribute('aria-label') || target.title || 'Button').trim();
-    const href = target.getAttribute('href') || '';
-    if (href.includes('twitter.com/share') || href.includes('facebook.com/sharer') || href.includes('pinterest.com/pin')) {
-      if (href.includes('example.com') || href === '#' || href.includes('null') || href.includes('undefined')) {
-        addBug({
-          type: 'Functional',
-          area: PAGE_AREA,
-          title: `Social share button "${btnText}" points to invalid or placeholder URL`,
-          steps: [
-            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
-            `Navigate to: ${CURRENT_URL}`,
-            `Locate the social share button "${btnText}"`,
-            `Click the share button`
-          ],
-          expected: 'Clicking the share button should open a valid social sharing dialog with the product URL.',
-          actual: `The share link points to broken or placeholder target: href="${href}".`,
-          element: target,
-          severity: 'High'
-        });
-      }
-    }
-  }, true);
-
   // -------------------------------------------------------------
-  // 2. Broken Pricing & Currency Syntax Scanner
-  // -------------------------------------------------------------
-  function checkPricingBugs() {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-      const text = node.nodeValue;
-      if (!text || text.length < 2) continue;
-      if (node.parentElement?.closest('#qa-bug-hunter-root')) continue;
-
-      if (/\$\s*\$[\d,]+/.test(text)) {
-        const prodName = getNearbyName(node.parentElement) || 'Product';
-        addBug({
-          type: 'Content',
-          area: PAGE_AREA,
-          title: `'${prodName}' displays duplicated currency symbol ($$) in price`,
-          steps: [
-            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
-            `Navigate to: ${CURRENT_URL}`,
-            `Locate the price display for '${prodName}'`,
-            `Observe the currency formatting`
-          ],
-          expected: 'Product prices should display exactly one currency symbol (e.g., $25.00).',
-          actual: `Price is rendered with duplicated currency symbols: "${text.trim()}".`,
-          element: node.parentElement,
-          severity: 'Medium'
-        });
-      }
-    }
-  }
-
-  // -------------------------------------------------------------
-  // 3. Media, Broken Images & Video Scanner
+  // 2. Media, Missing Images & Videos
   // -------------------------------------------------------------
   function checkMediaBugs() {
     document.querySelectorAll('img').forEach((img) => {
@@ -214,32 +188,10 @@
         });
       }
     });
-
-    document.querySelectorAll('video').forEach((vid) => {
-      if (vid.closest('#qa-bug-hunter-root')) return;
-      const src = vid.src || vid.querySelector('source')?.src || '';
-      if (!src || src.includes('example.com') || (src.endsWith('.mp4') === false && src.length < 5)) {
-        addBug({
-          type: 'Functional',
-          area: PAGE_AREA,
-          title: 'Embedded video player has missing or broken video source',
-          steps: [
-            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
-            `Navigate to: ${CURRENT_URL}`,
-            `Scroll down to the video player component`,
-            `Attempt to play the media or inspect the source`
-          ],
-          expected: 'The embedded video player should have a valid media source URL and play smoothly.',
-          actual: `Video element has an empty or invalid source (src="${src || 'empty'}").`,
-          element: vid,
-          severity: 'High'
-        });
-      }
-    });
   }
 
   // -------------------------------------------------------------
-  // 4. Cart & Math Auditor
+  // 3. Cart & Math Auditor
   // -------------------------------------------------------------
   function checkCartMath() {
     const fullText = document.body.innerText;
@@ -278,7 +230,7 @@
   }
 
   // -------------------------------------------------------------
-  // 5. Smart Links Checker (Ignores JS Modals & Groups Dead Links)
+  // 4. Smart Dead Links (Ignores UI Modals & Groups)
   // -------------------------------------------------------------
   function checkDeadLinks() {
     const brokenLinks = [];
@@ -290,7 +242,6 @@
       const text = (a.innerText || a.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ');
       const classes = (a.className || '').toLowerCase();
 
-      // Ignore standard JS UI toggles (Country selector, modals, dropdowns, accordions)
       const isUiToggle =
         a.getAttribute('data-toggle') ||
         a.getAttribute('data-target') ||
@@ -308,31 +259,13 @@
 
       if (isUiToggle) return;
 
-      // Check for empty or broken targets
       if (href === '' || href === '#' || href === 'javascript:void(0)') {
         if (text.length > 1) {
           brokenLinks.push({ el: a, text });
         }
-      } else if (href.includes('localhost') || href.includes('staging.')) {
-        addBug({
-          type: 'Functional',
-          area: PAGE_AREA,
-          title: `Link "${text.substring(0, 30)}" points to internal test domain (${href})`,
-          steps: [
-            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
-            `Navigate to: ${CURRENT_URL}`,
-            `Locate the link labeled "${text.substring(0, 30)}"`,
-            `Observe destination target`
-          ],
-          expected: 'All links on production should point to live production domains.',
-          actual: `Link points to internal/staging URL: ${href}`,
-          element: a,
-          severity: 'High'
-        });
       }
     });
 
-    // Group multiple empty links into ONE consolidated report to prevent "Bug Splitting"
     if (brokenLinks.length === 1) {
       const item = brokenLinks[0];
       addBug({
@@ -380,6 +313,9 @@
     if (isDup) return;
 
     bug.utestFormattedTitle = `${OS_NAME} - ${bug.area} - ${bug.title}`;
+    bug.isOOS = state.isOOS;
+    bug.oosWarning = state.oosReason;
+
     state.bugs.push(bug);
 
     if (bug.element && bug.element.style) {
@@ -408,12 +344,22 @@
     }
 
     const bugCount = state.bugs.length;
-    const badgeBg = bugCount > 0 ? '#dc2626' : '#10b981';
+    let badgeBg = '#10b981';
+    let badgeText = `${bugCount} ${bugCount === 1 ? 'Issue' : 'Issues'}`;
+    let icon = '🐞';
+
+    if (state.isOOS) {
+      badgeBg = '#d97706'; // Amber Warning
+      badgeText = '⚠️ OUT OF SCOPE PAGE';
+      icon = '🛡️';
+    } else if (bugCount > 0) {
+      badgeBg = '#dc2626';
+    }
 
     uiRoot.innerHTML = `
       <div id="qa-badge" style="background: ${badgeBg};">
-        <span class="qa-icon">🐞</span>
-        <span class="qa-count">${bugCount} ${bugCount === 1 ? 'Issue' : 'Issues'}</span>
+        <span class="qa-icon">${icon}</span>
+        <span class="qa-count">${badgeText}</span>
       </div>
 
       <div id="qa-drawer" class="qa-hidden">
@@ -424,14 +370,31 @@
             <button id="qa-close-drawer">✕</button>
           </div>
         </div>
+
+        ${
+          state.isOOS
+            ? `
+          <div class="qa-oos-alert-banner">
+            <strong>🛡️ OUT OF SCOPE WARNING</strong>
+            <p>This page matches an excluded area: <em>"${state.oosReason}"</em>. In uTest cycles, reporting bugs from this section will result in rejection!</p>
+          </div>
+        `
+            : ''
+        }
+
         <div class="qa-drawer-body">
           ${
             bugCount === 0
-              ? '<p class="qa-empty">No user-visible bugs found on this page. Continue exploring!</p>'
+              ? '<p class="qa-empty">No issues found on this page. Continue exploring!</p>'
               : state.bugs
                   .map(
                     (b, i) => `
-              <div class="qa-bug-card">
+              <div class="qa-bug-card ${b.isOOS ? 'qa-card-oos-flagged' : ''}">
+                ${
+                  b.isOOS
+                    ? '<div class="qa-card-oos-badge">⚠️ OUT OF SCOPE WARNING: Do NOT report this bug!</div>'
+                    : ''
+                }
                 <div class="qa-card-top">
                   <span class="qa-tag qa-tag-${b.type.toLowerCase()}">${b.type}</span>
                   <span class="qa-severity qa-sev-${b.severity.toLowerCase()}">${b.severity}</span>
@@ -543,7 +506,7 @@
   }
 
   function triggerScan() {
-    checkPricingBugs();
+    evaluateOOS();
     checkMediaBugs();
     checkCartMath();
     checkDeadLinks();
