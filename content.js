@@ -1,11 +1,12 @@
 /**
- * QA Bug Hunter & Visual Assistant - Content Script v1.4.0
+ * QA Bug Hunter & Visual Assistant - Content Script v1.5.0
  * Features:
- * - 🛡️ Built-in Out-of-Scope (OOS) Shield: Detects and warns about Contact Us, Careers, Corporate, and external domains.
- * - Prevents TTL rejections for Out of Scope areas.
- * - Extracts nearby product names for missing asset bugs.
- * - Smart UI toggle filter (ignores dropdowns/language selectors).
- * - Full uTest formatting.
+ * - 🚫 Eliminates href="#" false positives (ignores smooth scroll triggers, tabs, and in-page anchors)
+ * - 🛡️ Built-in Out-of-Scope (OOS) Shield
+ * - 🛒 Cart Math & Financial Auditor
+ * - 🖼️ Real broken images & "No image found" detectors
+ * - 💥 Real-time JavaScript crash interceptor
+ * - 📋 1-Click uTest formatters
  */
 
 (function () {
@@ -36,13 +37,13 @@
   }
 
   // -------------------------------------------------------------
-  // 🛡️ Out of Scope (OOS) Detector
+  // 🛡️ Out-of-Scope (OOS) Shield
   // -------------------------------------------------------------
   const OOS_RULES = [
-    { regex: /contact|customer-service-contact|send-message|call-us|email-us/i, label: 'Contact Us / Customer Service (Usually OOS)' },
+    { regex: /contact|customer-service-contact|send-message|call-us|email-us/i, label: 'Contact Us / Customer Service (Excluded / OOS)' },
     { regex: /careers|jobs|recruitment|work-with-us/i, label: 'Careers & Recruitment (External / OOS)' },
     { regex: /about-group|corporate|investor|press-release|clarinsgroup/i, label: 'Corporate / Partner Site (External / OOS)' },
-    { regex: /terms-of-use|privacy-policy|legal|cookie-policy/i, label: 'Legal & Privacy Policies (Usually OOS)' }
+    { regex: /terms-of-use|privacy-policy|legal|cookie-policy/i, label: 'Legal & Privacy Policies (Excluded / OOS)' }
   ];
 
   function evaluateOOS() {
@@ -68,11 +69,12 @@
     if (path.includes('find-bugs') || title.includes('Find Bugs')) return 'Find Bugs Store';
     if (path.includes('cart') || path.includes('bag')) return 'Cart & Checkout';
     if (path.includes('reward')) return 'Rewards Page';
+    if (path.includes('spa')) return 'Spa Services';
     if (path.includes('gaming')) return 'Gaming Page';
     if (path.includes('contact')) return 'Contact Us';
     if (path.includes('product') || document.querySelector('.product-detail')) return 'Product Details Page';
     if (path.length <= 1) return 'Homepage';
-    return 'Catalog Page';
+    return 'Store Page';
   }
 
   const BASE_URL = window.location.origin;
@@ -230,79 +232,62 @@
   }
 
   // -------------------------------------------------------------
-  // 4. Smart Dead Links (Ignores UI Modals & Groups)
+  // 4. Smart Dead Links (NO MORE href="#" FALSE POSITIVES)
   // -------------------------------------------------------------
   function checkDeadLinks() {
-    const brokenLinks = [];
-
     document.querySelectorAll('a[href]').forEach((a) => {
       if (a.closest('#qa-bug-hunter-root')) return;
 
       const href = (a.getAttribute('href') || '').trim();
       const text = (a.innerText || a.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ');
-      const classes = (a.className || '').toLowerCase();
 
-      const isUiToggle =
-        a.getAttribute('data-toggle') ||
-        a.getAttribute('data-target') ||
-        a.getAttribute('aria-haspopup') ||
-        a.getAttribute('aria-expanded') ||
-        a.getAttribute('role') === 'button' ||
-        classes.includes('modal') ||
-        classes.includes('popup') ||
-        classes.includes('dropdown') ||
-        classes.includes('toggle') ||
-        classes.includes('accordion') ||
-        classes.includes('country') ||
-        classes.includes('lang') ||
-        a.onclick !== null;
+      // RULE 1: Never flag href="#" or href="#section" as bugs (they are valid JS / in-page scroll triggers)
+      if (href.startsWith('#') || href === 'javascript:void(0);' || href === 'javascript:;') {
+        return;
+      }
 
-      if (isUiToggle) return;
+      // RULE 2: Flag genuinely broken targets (undefined, null, localhost)
+      if (href.includes('undefined') || href.includes('null') || href.includes('[object') || href.includes('localhost') || href.includes('staging.')) {
+        addBug({
+          type: 'Functional',
+          area: PAGE_AREA,
+          title: `Interactive link "${text.substring(0, 30)}" points to invalid/test target (${href.substring(0, 40)})`,
+          steps: [
+            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
+            `Navigate to: ${CURRENT_URL}`,
+            `Locate the link labeled "${text.substring(0, 30)}"`,
+            `Observe the destination link URL`
+          ],
+          expected: 'All links should point to valid, live production endpoints.',
+          actual: `Link target contains broken/staging value: href="${href}".`,
+          element: a,
+          severity: 'High'
+        });
+        return;
+      }
 
-      if (href === '' || href === '#' || href === 'javascript:void(0)') {
-        if (text.length > 1) {
-          brokenLinks.push({ el: a, text });
+      // RULE 3: Empty href on major content cards
+      if (href === '' && text.length > 5) {
+        const isCard = a.closest('.card, .product, .tile, .item');
+        if (isCard) {
+          addBug({
+            type: 'Functional',
+            area: PAGE_AREA,
+            title: `Card "${text.substring(0, 30)}" contains empty href target and fails to navigate`,
+            steps: [
+              `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
+              `Navigate to: ${CURRENT_URL}`,
+              `Locate the card labeled "${text.substring(0, 30)}"`,
+              `Click on the card`
+            ],
+            expected: 'Clicking the card should navigate to the details page.',
+            actual: 'The card has an empty href target (href="") and does not navigate when clicked.',
+            element: a,
+            severity: 'Low'
+          });
         }
       }
     });
-
-    if (brokenLinks.length === 1) {
-      const item = brokenLinks[0];
-      addBug({
-        type: 'Functional',
-        area: PAGE_AREA,
-        title: `Interactive link "${item.text.substring(0, 30)}" contains empty href and fails to navigate`,
-        steps: [
-          `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
-          `Navigate to: ${CURRENT_URL}`,
-          `Locate the link labeled "${item.text.substring(0, 35)}"`,
-          `Click on the link`,
-          `Observe browser navigation`
-        ],
-        expected: `Clicking the link should navigate the user to the corresponding destination page.`,
-        actual: `The link has an empty href target (href="#") and does not navigate when clicked.`,
-        element: item.el,
-        severity: 'Low'
-      });
-    } else if (brokenLinks.length > 1) {
-      const sampleNames = brokenLinks.slice(0, 3).map(b => `"${b.text.substring(0, 20)}"`).join(', ');
-      addBug({
-        type: 'Functional',
-        area: PAGE_AREA,
-        title: `Multiple navigation links (${sampleNames}) contain empty href="#" placeholder targets`,
-        steps: [
-          `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
-          `Navigate to: ${CURRENT_URL}`,
-          `Locate the links on the page: ${sampleNames}`,
-          `Click on the links`,
-          `Observe that none of them navigate`
-        ],
-        expected: `All interactive links should lead to valid destination pages.`,
-        actual: `Multiple links on the page contain placeholder targets (href="#") and fail to navigate when clicked.`,
-        element: brokenLinks[0].el,
-        severity: 'Low'
-      });
-    }
   }
 
   // -------------------------------------------------------------
@@ -349,8 +334,8 @@
     let icon = '🐞';
 
     if (state.isOOS) {
-      badgeBg = '#d97706'; // Amber Warning
-      badgeText = '⚠️ OUT OF SCOPE PAGE';
+      badgeBg = '#d97706';
+      badgeText = '🛡️ OUT OF SCOPE PAGE';
       icon = '🛡️';
     } else if (bugCount > 0) {
       badgeBg = '#dc2626';
