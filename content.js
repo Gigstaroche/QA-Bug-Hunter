@@ -1,7 +1,10 @@
 /**
- * QA Bug Hunter & Visual Assistant - Content Script
- * Fully integrated with uTest Bug Reporting Guidelines & Format.
- * Supports: Math audits, Broken images, "No Image Found" Placeholders, Dead links, Runtime Crashes.
+ * QA Bug Hunter & Visual Assistant - Content Script v1.1.0
+ * Features:
+ * - Automatically captures nearby product names (e.g. "Exfoliating Body Brush")
+ * - Smart placeholder detector ("No image found")
+ * - Purges all 3rd party tracking beacons (Bing, Google, Facebook)
+ * - Complete uTest format with numbered steps starting from homepage
  */
 
 (function () {
@@ -35,6 +38,7 @@
     if (path.includes('checkout')) return 'Checkout';
     if (path.includes('account') || path.includes('login') || path.includes('profile')) return 'Account';
     if (path.includes('search')) return 'Search Results Page';
+    if (path.includes('contact') || path.includes('customer-service')) return 'Customer Service';
     if (path.length <= 1 || path === '/en' || path === '/en/') return 'Homepage';
     return 'Catalog Page';
   }
@@ -44,47 +48,76 @@
   const OS_NAME = getDeviceInfo();
   const PAGE_AREA = getPageArea();
 
+  // Strict list of analytics/tracking services to completely ignore
+  const TRACKING_DOMAINS = [
+    'bat.bing.com',
+    'bing.com',
+    'google-analytics.com',
+    'googletagmanager.com',
+    'doubleclick.net',
+    'facebook.com',
+    'facebook.net',
+    'criteo',
+    'clarity.ms',
+    'hotjar',
+    'analytics',
+    'pixel'
+  ];
+
+  // Helper to extract the exact name of the product or card next to the defect
+  function getNearbyProductName(el) {
+    if (!el) return '';
+    // 1. Check parent container (card, tile, product row)
+    const card = el.closest('[class*="product"], [class*="card"], [class*="tile"], [class*="item"], article, li, div') || el.parentElement;
+    if (card) {
+      // Look for title/heading tags first
+      const titleEl = card.querySelector('h1, h2, h3, h4, h5, [class*="name"], [class*="title"], [class*="label"]');
+      if (titleEl && titleEl.innerText.trim()) {
+        return titleEl.innerText.trim().split('\n')[0].replace(/\s+/g, ' ');
+      }
+      // Scan text lines inside the card
+      const textLines = card.innerText
+        .split('\n')
+        .map((t) => t.trim())
+        .filter((t) => t.length > 2 && !t.includes('points') && !t.includes('Select') && !t.includes('DETAILS') && !t.includes('No image'));
+      if (textLines.length > 0) {
+        return textLines[0].substring(0, 45);
+      }
+    }
+    // 2. Check next sibling text
+    if (el.nextElementSibling) {
+      const sibText = el.nextElementSibling.innerText?.trim();
+      if (sibText) return sibText.split('\n')[0].substring(0, 45);
+    }
+    return '';
+  }
+
   // -------------------------------------------------------------
   // 1. Crash & Runtime Error Listener
   // -------------------------------------------------------------
   window.addEventListener('error', (event) => {
+    const file = event.filename || '';
+    if (TRACKING_DOMAINS.some((d) => file.includes(d))) return;
+
     addBug({
       type: 'Crash',
       area: PAGE_AREA,
       title: 'JavaScript runtime error triggers in console',
       steps: [
-        `Open Google Chrome and navigate to: ${BASE_URL}`,
+        `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
         `Navigate to: ${CURRENT_URL}`,
         `Interact with page elements or trigger script execution`,
         `Observe the browser response`
       ],
       expected: 'Page scripts should execute smoothly without unhandled runtime exceptions.',
-      actual: `An unhandled JavaScript error occurred: "${event.message}" at ${event.filename || 'script'}:${event.lineno || 0}.`,
+      actual: `An unhandled JavaScript error occurred: "${event.message}" at ${file || 'script'}:${event.lineno || 0}.`,
       element: null,
       severity: 'Critical'
     });
   });
 
-  window.addEventListener('unhandledrejection', (event) => {
-    addBug({
-      type: 'Crash',
-      area: PAGE_AREA,
-      title: 'Unhandled Promise Rejection occurs on page',
-      steps: [
-        `Open Google Chrome and navigate to: ${BASE_URL}`,
-        `Navigate to: ${CURRENT_URL}`,
-        `Perform normal page interactions`,
-        `Observe page execution`
-      ],
-      expected: 'Asynchronous network operations should resolve without unhandled rejections.',
-      actual: `An unhandled promise rejection occurred: "${String(event.reason)}"`,
-      element: null,
-      severity: 'High'
-    });
-  });
-
   // -------------------------------------------------------------
-  // 2. Math & E-Commerce Auditor (Option A)
+  // 2. Math & E-Commerce Auditor
   // -------------------------------------------------------------
   function checkCartMath() {
     if (!state.settings.checkMath) return;
@@ -112,7 +145,7 @@
           area: 'Order Summary',
           title: `Applied discount or shipping is not calculated correctly in Order Summary`,
           steps: [
-            `Open Google Chrome and navigate to: ${BASE_URL}`,
+            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
             `Add items to cart and navigate to the cart page: ${CURRENT_URL}`,
             `Review the breakdown under Order summary (Subtotal: $${subtotal}, Discount: -$${discount}, Shipping: $${shipping})`,
             `Observe the calculated Estimated Total`
@@ -127,56 +160,105 @@
   }
 
   // -------------------------------------------------------------
-  // 3. Content & Placeholder Scanner
+  // 3. Media, Missing Images & "No Image Found" Detectors
   // -------------------------------------------------------------
-  const LEAK_PATTERNS = [
-    { regex: /\bNo image found\b/i, label: 'Product card displays placeholder "No image found"' },
-    { regex: /\bNaN\b/, label: 'NaN (Not-a-Number) displayed on page' },
-    { regex: /\bundefined\b/, label: 'Raw "undefined" text rendered in page body' },
-    { regex: /\[object Object\]/, label: 'Raw JavaScript "[object Object]" rendered on page' },
-    { regex: /\{\{[\w.-]+\}\}/, label: 'Unrendered template placeholder {{...}} visible on screen' },
-    { regex: /\bLorem ipsum\b/i, label: 'Dummy placeholder text "Lorem Ipsum" visible to end users' }
-  ];
+  function checkMediaAndPlaceholders() {
+    if (!state.settings.checkMedia) return;
 
-  function checkContentBugs() {
-    if (!state.settings.checkContent) return;
+    // Check all image tags
+    document.querySelectorAll('img').forEach((img) => {
+      if (img.closest('#qa-bug-hunter-root')) return;
 
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode(node) {
-          const parent = node.parentElement;
-          if (!parent) return NodeFilter.FILTER_REJECT;
-          const tag = parent.tagName.toLowerCase();
-          if (['script', 'style', 'noscript', 'textarea'].includes(tag)) return NodeFilter.FILTER_REJECT;
-          if (parent.closest('#qa-bug-hunter-root')) return NodeFilter.FILTER_REJECT;
-          return NodeFilter.FILTER_ACCEPT;
-        }
+      const src = (img.src || '').toLowerCase();
+      const alt = (img.alt || '').toLowerCase();
+
+      // Skip tracking beacons completely
+      if (TRACKING_DOMAINS.some((d) => src.includes(d))) return;
+
+      // Skip invisible / hidden elements
+      const rect = img.getBoundingClientRect();
+      const style = window.getComputedStyle(img);
+      if (
+        style.display === 'none' ||
+        style.visibility === 'hidden' ||
+        style.opacity === '0' ||
+        (img.offsetWidth <= 8 && img.offsetHeight <= 8) ||
+        (rect.width <= 8 && rect.height <= 8)
+      ) {
+        return;
       }
-    );
 
-    let currentNode;
-    while ((currentNode = walker.nextNode())) {
-      const text = currentNode.nodeValue;
-      if (!text || text.trim().length < 3) continue;
+      // Check A: "No image found" / placeholder graphic
+      const isPlaceholder =
+        src.includes('no-image') ||
+        src.includes('noimage') ||
+        src.includes('placeholder') ||
+        alt.includes('no image') ||
+        alt.includes('placeholder');
 
-      for (const pattern of LEAK_PATTERNS) {
-        if (pattern.regex.test(text)) {
-          const snippet = text.trim().substring(0, 80);
+      if (isPlaceholder) {
+        const prodName = getNearbyProductName(img) || 'Product';
+        addBug({
+          type: 'Visual',
+          area: PAGE_AREA,
+          title: `'${prodName}' card displays 'No image found' placeholder instead of product image`,
+          steps: [
+            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
+            `Navigate to: ${CURRENT_URL}`,
+            `Scroll down to the catalog grid`,
+            `Locate the product card for '${prodName}'`,
+            `Observe the product image displayed in the card`
+          ],
+          expected: `The product card for '${prodName}' should display a high-quality product image.`,
+          actual: `The product card for '${prodName}' displays a fallback placeholder graphic showing 'No image found'.`,
+          element: img,
+          severity: 'Medium'
+        });
+        return;
+      }
+
+      // Check B: Real visible image that failed to load (HTTP 404)
+      if (img.complete && img.naturalWidth === 0 && img.src && !img.src.startsWith('data:')) {
+        const prodName = getNearbyProductName(img) || 'Banner';
+        addBug({
+          type: 'Visual',
+          area: PAGE_AREA,
+          title: `'${prodName}' image asset failed to load (broken 404)`,
+          steps: [
+            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
+            `Navigate to: ${CURRENT_URL}`,
+            `Scroll down to the section for '${prodName}'`,
+            `Observe the image area`
+          ],
+          expected: `The image for '${prodName}' should load and render properly without breaking.`,
+          actual: `Image asset failed to load (HTTP 404): ${img.src.substring(0, 80)}...`,
+          element: img,
+          severity: 'Medium'
+        });
+      }
+    });
+
+    // Also check text nodes for literal "No image found"
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.parentElement && !node.parentElement.closest('#qa-bug-hunter-root')) {
+        if (/No image found/i.test(node.nodeValue)) {
+          const prodName = getNearbyProductName(node.parentElement) || 'Product';
           addBug({
-            type: pattern.label.includes('No image') ? 'Visual' : 'Content',
+            type: 'Visual',
             area: PAGE_AREA,
-            title: pattern.label,
+            title: `'${prodName}' card displays 'No image found' placeholder instead of product image`,
             steps: [
-              `Open Google Chrome and navigate to: ${BASE_URL}`,
+              `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
               `Navigate to: ${CURRENT_URL}`,
-              `Scroll down and inspect the catalog grid`,
-              `Observe the rendered item on screen`
+              `Scroll down to the catalog grid`,
+              `Locate the product card for '${prodName}'`,
+              `Observe the product image`
             ],
-            expected: 'All items should display legitimate product photography and valid text.',
-            actual: `Placeholder or missing asset displayed on screen: "${snippet}"`,
-            element: currentNode.parentElement,
+            expected: `The product card for '${prodName}' should display a valid product photograph.`,
+            actual: `The product card displays a placeholder graphic showing 'No image found'.`,
+            element: node.parentElement,
             severity: 'Medium'
           });
           break;
@@ -186,86 +268,37 @@
   }
 
   // -------------------------------------------------------------
-  // 4. Media & Placeholder Images (Option B) & Dead Links
+  // 4. Dead Anchor Links Check
   // -------------------------------------------------------------
-  function checkMediaAndLinks() {
-    if (state.settings.checkMedia) {
-      document.querySelectorAll('img').forEach((img) => {
-        if (img.closest('#qa-bug-hunter-root')) return;
+  function checkDeadLinks() {
+    if (!state.settings.checkLinks) return;
 
-        const src = (img.src || '').toLowerCase();
-        const alt = (img.alt || '').toLowerCase();
+    document.querySelectorAll('a[href]').forEach((a) => {
+      if (a.closest('#qa-bug-hunter-root')) return;
+      const href = a.getAttribute('href');
+      const linkText = (a.innerText || a.getAttribute('aria-label') || 'Card / Button').trim().replace(/\s+/g, ' ');
 
-        // Check 1: 404 / broken load
-        if (img.complete && img.naturalWidth === 0 && img.src && !img.src.startsWith('data:')) {
+      if (href === '' || href === '#' || href === 'javascript:void(0)') {
+        if (!a.onclick && !a.getAttribute('role')) {
           addBug({
-            type: 'Visual',
+            type: 'Functional',
             area: PAGE_AREA,
-            title: 'Image fails to load and displays as broken icon',
+            title: `Interactive link "${linkText.substring(0, 30)}" contains empty href and fails to navigate`,
             steps: [
-              `Open Google Chrome and navigate to: ${BASE_URL}`,
+              `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
               `Navigate to: ${CURRENT_URL}`,
-              `Scroll down to the image area`,
-              `Observe the rendered product/banner image`
+              `Locate the link / card labeled "${linkText.substring(0, 40)}"`,
+              `Click on the link / card`,
+              `Observe the browser behavior and destination URL`
             ],
-            expected: 'The image should load and render properly without breaking.',
-            actual: `Image asset failed to load (HTTP 404 / broken src): ${img.src.substring(0, 80)}...`,
-            element: img,
-            severity: 'Medium'
+            expected: `Clicking the link should navigate the user to the corresponding destination page.`,
+            actual: `The link has an empty href target (href="${href}") and does not navigate or perform any action when clicked.`,
+            element: a,
+            severity: 'Low'
           });
         }
-
-        // Check 2: Fallback Placeholder image (Option B)
-        if (src.includes('no-image') || src.includes('placeholder') || alt.includes('no image') || alt.includes('placeholder')) {
-          const cardTitle = img.closest('.product, [class*="card"], [class*="item"]')?.innerText?.split('\n')[0] || 'Product';
-          addBug({
-            type: 'Visual',
-            area: PAGE_AREA,
-            title: `Product card "${cardTitle.substring(0, 30)}" displays fallback 'No image found' placeholder instead of product image`,
-            steps: [
-              `Open Google Chrome and navigate to: ${BASE_URL}`,
-              `Navigate to: ${CURRENT_URL}`,
-              `Scroll down to the catalog grid`,
-              `Locate product "${cardTitle.substring(0, 30)}"`,
-              `Observe the product image`
-            ],
-            expected: `The product card should display a valid product photograph for ${cardTitle.substring(0, 30)}.`,
-            actual: `The product card renders a generic 'No image found' fallback placeholder image.`,
-            element: img,
-            severity: 'Medium'
-          });
-        }
-      });
-    }
-
-    if (state.settings.checkLinks) {
-      document.querySelectorAll('a[href]').forEach((a) => {
-        if (a.closest('#qa-bug-hunter-root')) return;
-        const href = a.getAttribute('href');
-        const linkText = (a.innerText || a.getAttribute('aria-label') || 'Card / Button').trim().replace(/\s+/g, ' ');
-
-        if (href === '' || href === '#' || href === 'javascript:void(0)') {
-          if (!a.onclick && !a.getAttribute('role')) {
-            addBug({
-              type: 'Functional',
-              area: PAGE_AREA,
-              title: `Interactive link "${linkText.substring(0, 30)}" contains empty href and fails to navigate`,
-              steps: [
-                `Open Google Chrome and navigate to: ${BASE_URL}`,
-                `Navigate to: ${CURRENT_URL}`,
-                `Locate the link / card labeled "${linkText.substring(0, 40)}"`,
-                `Click on the link / card`,
-                `Observe the browser behavior and destination URL`
-              ],
-              expected: `Clicking the link should navigate the user to the corresponding destination page.`,
-              actual: `The link has an empty href target (href="${href}") and does not navigate or perform any action when clicked.`,
-              element: a,
-              severity: 'Low'
-            });
-          }
-        }
-      });
-    }
+      }
+    });
   }
 
   // -------------------------------------------------------------
@@ -334,7 +367,7 @@
         <div class="qa-drawer-body">
           ${
             bugCount === 0
-              ? '<p class="qa-empty">No issues found on this page. Continue exploring!</p>'
+              ? '<p class="qa-empty">No user-visible bugs found on this page. Continue exploring!</p>'
               : state.bugs
                   .map(
                     (b, i) => `
@@ -365,7 +398,7 @@
                 </div>
 
                 <div class="qa-card-actions">
-                  ${b.element ? `<button class="qa-btn-locate" data-index="${i}">📍 Locate</button>` : ''}
+                  ${b.element ? `<button class="qa-btn-locate" data-index="${i}">🎯 Locate on Screen</button>` : ''}
                   <button class="qa-btn-copy-title" data-index="${i}">Copy Title</button>
                   <button class="qa-btn-copy-steps" data-index="${i}">Copy Steps</button>
                   <button class="qa-btn-copy-all" data-index="${i}" style="background: #2563eb; color: #fff;">📋 Copy Full Report</button>
@@ -392,7 +425,7 @@
         if (b && b.element) {
           b.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           b.element.classList.add('qa-flash-highlight');
-          setTimeout(() => b.element.classList.remove('qa-flash-highlight'), 3000);
+          setTimeout(() => b.element.classList.remove('qa-flash-highlight'), 3500);
         }
       };
     });
@@ -445,8 +478,8 @@
     clearTimeout(scanTimeout);
     scanTimeout = setTimeout(() => {
       checkCartMath();
-      checkContentBugs();
-      checkMediaAndLinks();
+      checkMediaAndPlaceholders();
+      checkDeadLinks();
       applyHighContrast();
     }, 600);
   }
