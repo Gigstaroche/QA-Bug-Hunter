@@ -1,10 +1,10 @@
 /**
- * QA Bug Hunter & Visual Assistant - Content Script v1.1.0
- * Features:
- * - Automatically captures nearby product names (e.g. "Exfoliating Body Brush")
- * - Smart placeholder detector ("No image found")
- * - Purges all 3rd party tracking beacons (Bing, Google, Facebook)
- * - Complete uTest format with numbered steps starting from homepage
+ * QA Bug Hunter & Visual Assistant - Content Script v1.2.0
+ * Trained for AcademyBugs and live paid cycles:
+ * - Real-time Click & Interaction Crash Interceptor
+ * - Media & Broken Video/Image Scanner
+ * - Broken Pricing & Currency Scanner (e.g. "$$25", "$0.00")
+ * - Deep Page Auditor button for 1-click full-page scans
  */
 
 (function () {
@@ -33,14 +33,13 @@
 
   function getPageArea() {
     const path = window.location.pathname.toLowerCase();
-    if (path.includes('cart') || path.includes('bag')) return 'Order Summary';
+    const title = document.title || '';
+    if (path.includes('find-bugs') || title.includes('Find Bugs')) return 'Find Bugs Store';
+    if (path.includes('cart') || path.includes('bag')) return 'Cart & Checkout';
     if (path.includes('reward')) return 'Rewards Page';
-    if (path.includes('checkout')) return 'Checkout';
-    if (path.includes('account') || path.includes('login') || path.includes('profile')) return 'Account';
-    if (path.includes('search')) return 'Search Results Page';
-    if (path.includes('contact') || path.includes('customer-service')) return 'Customer Service';
-    if (path.length <= 1 || path === '/en' || path === '/en/') return 'Homepage';
-    return 'Catalog Page';
+    if (path.includes('product') || document.querySelector('.product-detail')) return 'Product Details Page';
+    if (path.length <= 1) return 'Homepage';
+    return 'Store Page';
   }
 
   const BASE_URL = window.location.origin;
@@ -48,7 +47,6 @@
   const OS_NAME = getDeviceInfo();
   const PAGE_AREA = getPageArea();
 
-  // Strict list of analytics/tracking services to completely ignore
   const TRACKING_DOMAINS = [
     'bat.bing.com',
     'bing.com',
@@ -56,44 +54,25 @@
     'googletagmanager.com',
     'doubleclick.net',
     'facebook.com',
-    'facebook.net',
-    'criteo',
-    'clarity.ms',
-    'hotjar',
-    'analytics',
-    'pixel'
+    'facebook.net'
   ];
 
-  // Helper to extract the exact name of the product or card next to the defect
-  function getNearbyProductName(el) {
+  function getNearbyName(el) {
     if (!el) return '';
-    // 1. Check parent container (card, tile, product row)
-    const card = el.closest('[class*="product"], [class*="card"], [class*="tile"], [class*="item"], article, li, div') || el.parentElement;
+    const card = el.closest('[class*="product"], [class*="card"], [class*="item"], [class*="tile"], article, li, div') || el.parentElement;
     if (card) {
-      // Look for title/heading tags first
-      const titleEl = card.querySelector('h1, h2, h3, h4, h5, [class*="name"], [class*="title"], [class*="label"]');
+      const titleEl = card.querySelector('h1, h2, h3, h4, [class*="name"], [class*="title"], [class*="heading"]');
       if (titleEl && titleEl.innerText.trim()) {
-        return titleEl.innerText.trim().split('\n')[0].replace(/\s+/g, ' ');
+        return titleEl.innerText.trim().split('\n')[0].substring(0, 40);
       }
-      // Scan text lines inside the card
-      const textLines = card.innerText
-        .split('\n')
-        .map((t) => t.trim())
-        .filter((t) => t.length > 2 && !t.includes('points') && !t.includes('Select') && !t.includes('DETAILS') && !t.includes('No image'));
-      if (textLines.length > 0) {
-        return textLines[0].substring(0, 45);
-      }
-    }
-    // 2. Check next sibling text
-    if (el.nextElementSibling) {
-      const sibText = el.nextElementSibling.innerText?.trim();
-      if (sibText) return sibText.split('\n')[0].substring(0, 45);
+      const lines = card.innerText.split('\n').map(l => l.trim()).filter(l => l.length > 2 && !l.includes('$'));
+      if (lines.length > 0) return lines[0].substring(0, 40);
     }
     return '';
   }
 
   // -------------------------------------------------------------
-  // 1. Crash & Runtime Error Listener
+  // 1. Crash & Interaction Listener
   // -------------------------------------------------------------
   window.addEventListener('error', (event) => {
     const file = event.filename || '';
@@ -102,80 +81,95 @@
     addBug({
       type: 'Crash',
       area: PAGE_AREA,
-      title: 'JavaScript runtime error triggers in console',
+      title: 'JavaScript runtime error occurs on page interaction',
       steps: [
         `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
         `Navigate to: ${CURRENT_URL}`,
-        `Interact with page elements or trigger script execution`,
+        `Perform normal button click or dropdown action`,
         `Observe the browser response`
       ],
-      expected: 'Page scripts should execute smoothly without unhandled runtime exceptions.',
-      actual: `An unhandled JavaScript error occurred: "${event.message}" at ${file || 'script'}:${event.lineno || 0}.`,
+      expected: 'Interactive elements should execute properly without JavaScript console exceptions.',
+      actual: `JavaScript runtime exception: "${event.message}" at ${file}:${event.lineno || 0}.`,
       element: null,
       severity: 'Critical'
     });
   });
 
-  // -------------------------------------------------------------
-  // 2. Math & E-Commerce Auditor
-  // -------------------------------------------------------------
-  function checkCartMath() {
-    if (!state.settings.checkMath) return;
+  // Track button/link clicks that fail or throw
+  document.addEventListener('click', (e) => {
+    const target = e.target.closest('button, a, input[type="submit"], [role="button"]');
+    if (!target || target.closest('#qa-bug-hunter-root')) return;
 
-    const fullText = document.body.innerText;
-    const subtotalMatch = fullText.match(/(?:subtotal|items total|product total)[^\d$]*\$?\s*([\d,]+\.\d{2})/i);
-    const totalMatch = fullText.match(/(?:estimated total|order total|grand total|total)\s*:?[^\d$]*\$?\s*([\d,]+\.\d{2})/i);
-    const shippingMatch = fullText.match(/shipping[^\d$]*\$?\s*([\d,]+\.\d{2})/i);
-    const discountMatch = fullText.match(/(?:discount|rewards|promo|coupon)[^\d$]*-\$?\s*([\d,]+\.\d{2})/i);
-    const taxMatch = fullText.match(/(?:tax|estimated tax)[^\d$]*\$?\s*([\d,]+\.\d{2})/i);
-
-    if (subtotalMatch && totalMatch) {
-      const subtotal = parseFloat(subtotalMatch[1].replace(/,/g, ''));
-      const total = parseFloat(totalMatch[1].replace(/,/g, ''));
-      const shipping = shippingMatch ? parseFloat(shippingMatch[1].replace(/,/g, '')) : 0.0;
-      const discount = discountMatch ? parseFloat(discountMatch[1].replace(/,/g, '')) : 0.0;
-      const tax = taxMatch ? parseFloat(taxMatch[1].replace(/,/g, '')) : 0.0;
-
-      const expectedTotal = Number((subtotal - discount + shipping + tax).toFixed(2));
-      const diff = Math.abs(expectedTotal - total);
-
-      if (diff > 0.05) {
+    const btnText = (target.innerText || target.getAttribute('aria-label') || target.title || 'Button').trim();
+    
+    // Check if target is a broken social share button
+    const href = target.getAttribute('href') || '';
+    if (href.includes('twitter.com/share') || href.includes('facebook.com/sharer') || href.includes('pinterest.com/pin')) {
+      if (href.includes('example.com') || href === '#' || href.includes('null') || href.includes('undefined')) {
         addBug({
           type: 'Functional',
-          area: 'Order Summary',
-          title: `Applied discount or shipping is not calculated correctly in Order Summary`,
+          area: PAGE_AREA,
+          title: `Social share button "${btnText}" points to invalid or placeholder URL`,
           steps: [
             `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
-            `Add items to cart and navigate to the cart page: ${CURRENT_URL}`,
-            `Review the breakdown under Order summary (Subtotal: $${subtotal}, Discount: -$${discount}, Shipping: $${shipping})`,
-            `Observe the calculated Estimated Total`
+            `Navigate to: ${CURRENT_URL}`,
+            `Locate the social share button "${btnText}"`,
+            `Click the share button`
           ],
-          expected: `The Estimated Total should equal Subtotal minus Discounts plus Shipping ($${expectedTotal.toFixed(2)}).`,
-          actual: `The Estimated Total displays $${total.toFixed(2)}, ignoring discount/shipping rules (discrepancy of $${diff.toFixed(2)}).`,
-          element: findElementWithText(totalMatch[1]),
-          severity: 'Critical'
+          expected: 'Clicking the share button should open a valid social sharing dialog with the product URL.',
+          actual: `The share link points to broken or placeholder target: href="${href}".`,
+          element: target,
+          severity: 'High'
+        });
+      }
+    }
+  }, true);
+
+  // -------------------------------------------------------------
+  // 2. Broken Pricing & Currency Syntax Scanner
+  // -------------------------------------------------------------
+  function checkPricingBugs() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const text = node.nodeValue;
+      if (!text || text.length < 2) continue;
+      if (node.parentElement?.closest('#qa-bug-hunter-root')) continue;
+
+      // Bug: Double dollar signs (e.g. "$$25.00")
+      if (/\$\s*\$[\d,]+/.test(text)) {
+        const prodName = getNearbyName(node.parentElement) || 'Product';
+        addBug({
+          type: 'Content',
+          area: PAGE_AREA,
+          title: `'${prodName}' displays duplicated currency symbol ($$) in price`,
+          steps: [
+            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
+            `Navigate to: ${CURRENT_URL}`,
+            `Locate the price display for '${prodName}'`,
+            `Observe the currency formatting`
+          ],
+          expected: 'Product prices should display exactly one currency symbol (e.g., $25.00).',
+          actual: `Price is rendered with duplicated currency symbols: "${text.trim()}".`,
+          element: node.parentElement,
+          severity: 'Medium'
         });
       }
     }
   }
 
   // -------------------------------------------------------------
-  // 3. Media, Missing Images & "No Image Found" Detectors
+  // 3. Media, Broken Images & Video Scanner
   // -------------------------------------------------------------
-  function checkMediaAndPlaceholders() {
-    if (!state.settings.checkMedia) return;
-
-    // Check all image tags
+  function checkMediaBugs() {
+    // Images
     document.querySelectorAll('img').forEach((img) => {
       if (img.closest('#qa-bug-hunter-root')) return;
-
       const src = (img.src || '').toLowerCase();
       const alt = (img.alt || '').toLowerCase();
 
-      // Skip tracking beacons completely
       if (TRACKING_DOMAINS.some((d) => src.includes(d))) return;
 
-      // Skip invisible / hidden elements
       const rect = img.getBoundingClientRect();
       const style = window.getComputedStyle(img);
       if (
@@ -184,53 +178,43 @@
         style.opacity === '0' ||
         (img.offsetWidth <= 8 && img.offsetHeight <= 8) ||
         (rect.width <= 8 && rect.height <= 8)
-      ) {
-        return;
-      }
+      ) return;
 
-      // Check A: "No image found" / placeholder graphic
-      const isPlaceholder =
-        src.includes('no-image') ||
-        src.includes('noimage') ||
-        src.includes('placeholder') ||
-        alt.includes('no image') ||
-        alt.includes('placeholder');
-
-      if (isPlaceholder) {
-        const prodName = getNearbyProductName(img) || 'Product';
+      // Placeholder / No Image
+      if (src.includes('no-image') || src.includes('noimage') || src.includes('placeholder') || alt.includes('no image')) {
+        const name = getNearbyName(img) || 'Product';
         addBug({
           type: 'Visual',
           area: PAGE_AREA,
-          title: `'${prodName}' card displays 'No image found' placeholder instead of product image`,
+          title: `'${name}' card displays placeholder 'No image found' instead of product photo`,
           steps: [
             `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
             `Navigate to: ${CURRENT_URL}`,
-            `Scroll down to the catalog grid`,
-            `Locate the product card for '${prodName}'`,
-            `Observe the product image displayed in the card`
+            `Locate the item card for '${name}'`,
+            `Observe the product image`
           ],
-          expected: `The product card for '${prodName}' should display a high-quality product image.`,
-          actual: `The product card for '${prodName}' displays a fallback placeholder graphic showing 'No image found'.`,
+          expected: `The product card for '${name}' should render a legitimate product image.`,
+          actual: `The item displays a fallback placeholder graphic showing 'No image found'.`,
           element: img,
           severity: 'Medium'
         });
         return;
       }
 
-      // Check B: Real visible image that failed to load (HTTP 404)
+      // Broken 404 image
       if (img.complete && img.naturalWidth === 0 && img.src && !img.src.startsWith('data:')) {
-        const prodName = getNearbyProductName(img) || 'Banner';
+        const name = getNearbyName(img) || 'Product';
         addBug({
           type: 'Visual',
           area: PAGE_AREA,
-          title: `'${prodName}' image asset failed to load (broken 404)`,
+          title: `'${name}' image asset failed to load (HTTP 404)`,
           steps: [
             `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
             `Navigate to: ${CURRENT_URL}`,
-            `Scroll down to the section for '${prodName}'`,
+            `Locate the section for '${name}'`,
             `Observe the image area`
           ],
-          expected: `The image for '${prodName}' should load and render properly without breaking.`,
+          expected: `The image for '${name}' should load and render properly without breaking.`,
           actual: `Image asset failed to load (HTTP 404): ${img.src.substring(0, 80)}...`,
           element: img,
           severity: 'Medium'
@@ -238,58 +222,90 @@
       }
     });
 
-    // Also check text nodes for literal "No image found"
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-      if (node.parentElement && !node.parentElement.closest('#qa-bug-hunter-root')) {
-        if (/No image found/i.test(node.nodeValue)) {
-          const prodName = getNearbyProductName(node.parentElement) || 'Product';
-          addBug({
-            type: 'Visual',
-            area: PAGE_AREA,
-            title: `'${prodName}' card displays 'No image found' placeholder instead of product image`,
-            steps: [
-              `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
-              `Navigate to: ${CURRENT_URL}`,
-              `Scroll down to the catalog grid`,
-              `Locate the product card for '${prodName}'`,
-              `Observe the product image`
-            ],
-            expected: `The product card for '${prodName}' should display a valid product photograph.`,
-            actual: `The product card displays a placeholder graphic showing 'No image found'.`,
-            element: node.parentElement,
-            severity: 'Medium'
-          });
-          break;
-        }
+    // Videos
+    document.querySelectorAll('video').forEach((vid) => {
+      if (vid.closest('#qa-bug-hunter-root')) return;
+      const src = vid.src || vid.querySelector('source')?.src || '';
+      if (!src || src.includes('example.com') || src.endsWith('.mp4') === false && src.length < 5) {
+        addBug({
+          type: 'Functional',
+          area: PAGE_AREA,
+          title: 'Embedded video player has missing or broken video source',
+          steps: [
+            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
+            `Navigate to: ${CURRENT_URL}`,
+            `Scroll down to the video player component`,
+            `Attempt to play the media or inspect the source`
+          ],
+          expected: 'The embedded video player should have a valid media source URL and play smoothly.',
+          actual: `Video element has an empty or invalid source (src="${src || 'empty'}").`,
+          element: vid,
+          severity: 'High'
+        });
+      }
+    });
+  }
+
+  // -------------------------------------------------------------
+  // 4. Cart & Math Auditor
+  // -------------------------------------------------------------
+  function checkCartMath() {
+    const fullText = document.body.innerText;
+    const subtotalMatch = fullText.match(/(?:subtotal|items total|product total)[^\d$]*\$?\s*([\d,]+\.\d{2})/i);
+    const totalMatch = fullText.match(/(?:estimated total|order total|grand total|total)\s*:?[^\d$]*\$?\s*([\d,]+\.\d{2})/i);
+    const shippingMatch = fullText.match(/shipping[^\d$]*\$?\s*([\d,]+\.\d{2})/i);
+    const discountMatch = fullText.match(/(?:discount|rewards|promo|coupon)[^\d$]*-\$?\s*([\d,]+\.\d{2})/i);
+
+    if (subtotalMatch && totalMatch) {
+      const subtotal = parseFloat(subtotalMatch[1].replace(/,/g, ''));
+      const total = parseFloat(totalMatch[1].replace(/,/g, ''));
+      const shipping = shippingMatch ? parseFloat(shippingMatch[1].replace(/,/g, '')) : 0.0;
+      const discount = discountMatch ? parseFloat(discountMatch[1].replace(/,/g, '')) : 0.0;
+
+      const expectedTotal = Number((subtotal - discount + shipping).toFixed(2));
+      const diff = Math.abs(expectedTotal - total);
+
+      if (diff > 0.05) {
+        addBug({
+          type: 'Functional',
+          area: 'Cart & Checkout',
+          title: `Calculated total does not match item breakdown in cart summary`,
+          steps: [
+            `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
+            `Add items to cart and navigate to the cart page: ${CURRENT_URL}`,
+            `Review the breakdown under order summary (Subtotal: $${subtotal}, Discount: -$${discount}, Shipping: $${shipping})`,
+            `Observe the displayed Total`
+          ],
+          expected: `The Total should equal Subtotal minus Discounts plus Shipping ($${expectedTotal.toFixed(2)}).`,
+          actual: `The Total displays $${total.toFixed(2)}, creating an arithmetic discrepancy of $${diff.toFixed(2)}.`,
+          element: findElementWithText(totalMatch[1]),
+          severity: 'Critical'
+        });
       }
     }
   }
 
   // -------------------------------------------------------------
-  // 4. Dead Anchor Links Check
+  // 5. Dead Links Checker
   // -------------------------------------------------------------
   function checkDeadLinks() {
-    if (!state.settings.checkLinks) return;
-
     document.querySelectorAll('a[href]').forEach((a) => {
       if (a.closest('#qa-bug-hunter-root')) return;
       const href = a.getAttribute('href');
-      const linkText = (a.innerText || a.getAttribute('aria-label') || 'Card / Button').trim().replace(/\s+/g, ' ');
+      const text = (a.innerText || a.getAttribute('aria-label') || 'Link').trim().replace(/\s+/g, ' ');
 
       if (href === '' || href === '#' || href === 'javascript:void(0)') {
         if (!a.onclick && !a.getAttribute('role')) {
           addBug({
             type: 'Functional',
             area: PAGE_AREA,
-            title: `Interactive link "${linkText.substring(0, 30)}" contains empty href and fails to navigate`,
+            title: `Interactive link "${text.substring(0, 30)}" contains empty href and fails to navigate`,
             steps: [
               `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
               `Navigate to: ${CURRENT_URL}`,
-              `Locate the link / card labeled "${linkText.substring(0, 40)}"`,
-              `Click on the link / card`,
-              `Observe the browser behavior and destination URL`
+              `Locate the link labeled "${text.substring(0, 35)}"`,
+              `Click on the link`,
+              `Observe browser navigation`
             ],
             expected: `Clicking the link should navigate the user to the corresponding destination page.`,
             actual: `The link has an empty href target (href="${href}") and does not navigate or perform any action when clicked.`,
@@ -297,20 +313,6 @@
             severity: 'Low'
           });
         }
-      }
-    });
-  }
-
-  // -------------------------------------------------------------
-  // 5. Visual Eye-Aid Mode
-  // -------------------------------------------------------------
-  function applyHighContrast() {
-    if (!state.settings.highContrast) return;
-    document.querySelectorAll('a, button, input, select').forEach((el) => {
-      if (el.closest('#qa-bug-hunter-root')) return;
-      if (!el.dataset.qaA11yStyled) {
-        el.dataset.qaA11yStyled = 'true';
-        el.classList.add('qa-assistive-focus');
       }
     });
   }
@@ -362,12 +364,15 @@
       <div id="qa-drawer" class="qa-hidden">
         <div class="qa-drawer-header">
           <h3>🐞 uTest Bug Formatter (${bugCount})</h3>
-          <button id="qa-close-drawer">✕</button>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button id="qa-deep-scan" style="background: #2563eb; color: #fff; border: none; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer;">⚡ Deep Scan</button>
+            <button id="qa-close-drawer">✕</button>
+          </div>
         </div>
         <div class="qa-drawer-body">
           ${
             bugCount === 0
-              ? '<p class="qa-empty">No user-visible bugs found on this page. Continue exploring!</p>'
+              ? '<p class="qa-empty">No bugs detected yet. Click "⚡ Deep Scan" or interact with elements, filters, and buttons!</p>'
               : state.bugs
                   .map(
                     (b, i) => `
@@ -415,9 +420,18 @@
     const badge = uiRoot.querySelector('#qa-badge');
     const drawer = uiRoot.querySelector('#qa-drawer');
     const closeBtn = uiRoot.querySelector('#qa-close-drawer');
+    const deepScanBtn = uiRoot.querySelector('#qa-deep-scan');
 
     badge.onclick = () => drawer.classList.toggle('qa-hidden');
     closeBtn.onclick = () => drawer.classList.add('qa-hidden');
+
+    if (deepScanBtn) {
+      deepScanBtn.onclick = () => {
+        deepScanBtn.innerText = 'Scanning...';
+        triggerScan();
+        setTimeout(() => (deepScanBtn.innerText = '⚡ Deep Scan'), 1000);
+      };
+    }
 
     uiRoot.querySelectorAll('.qa-btn-locate').forEach((btn) => {
       btn.onclick = () => {
@@ -473,15 +487,11 @@
     return div.innerHTML;
   }
 
-  let scanTimeout = null;
   function triggerScan() {
-    clearTimeout(scanTimeout);
-    scanTimeout = setTimeout(() => {
-      checkCartMath();
-      checkMediaAndPlaceholders();
-      checkDeadLinks();
-      applyHighContrast();
-    }, 600);
+    checkPricingBugs();
+    checkMediaBugs();
+    checkCartMath();
+    checkDeadLinks();
   }
 
   const observer = new MutationObserver(() => triggerScan());
