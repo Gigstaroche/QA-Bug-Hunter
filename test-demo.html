@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>QA Bug Hunter - Demo Test Page</title>
+  <link rel="icon" type="image/png" href="icons/icon32.png">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px auto;
+      max-width: 800px;
+      line-height: 1.6;
+      background: #f1f5f9;
+      color: #334155;
+    }
+    .card {
+      background: #ffffff;
+      padding: 24px;
+      margin-bottom: 24px;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+    }
+    h2 { margin-top: 0; color: #0f172a; }
+    .price-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f1f5f9; }
+    .total-row { font-weight: bold; font-size: 18px; border-top: 2px solid #0f172a; margin-top: 8px; }
+    button { background: #2563eb; color: white; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+  </style>
+</head>
+<body>
+  <h1>🐞 QA Bug Hunter Demo Lab</h1>
+  <p>Load your extension, open this page, and watch the floating badge in the bottom-right corner detect these sample bugs!</p>
+
+  <!-- 1. Functional Math Bug -->
+  <div class="card">
+    <h2>1. E-Commerce Cart Summary (Math Bug)</h2>
+    <div class="price-row"><span>Subtotal:</span><span>$100.00</span></div>
+    <div class="price-row"><span>Discounts:</span><span>-$10.00</span></div>
+    <div class="price-row"><span>Shipping:</span><span>$15.00</span></div>
+    <div class="price-row total-row"><span>Estimated Total:</span><span>$125.00</span></div>
+    <p><em>(Math error: $100 - $10 + $15 should be $105.00, but site displays $125.00!)</em></p>
+  </div>
+
+  <!-- 2. Content & Leaked Code Bugs -->
+  <div class="card">
+    <h2>2. Content & Code Leaks</h2>
+    <p>Welcome back, <strong>{{customer.firstName}}</strong>!</p>
+    <p>Available Loyalty Points: <strong>NaN</strong></p>
+    <p>Status: <strong>[object Object]</strong></p>
+    <p>Description: <em>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</em></p>
+  </div>
+
+  <!-- 3. Broken Image & Dead Link -->
+  <div class="card">
+    <h2>3. Visual & Link Defects</h2>
+    <p>Broken Product Image:</p>
+    <img src="https://example.com/this-image-definitely-does-not-exist-404.jpg" alt="Missing Photo" width="120" height="120" style="background:#eee;">
+    <br><br>
+    <a href="#">Click here for Returns Policy (Dead Link)</a>
+  </div>
+
+  <!-- 4. Crash Bug -->
+  <div class="card">
+    <h2>4. Crash / Silent Runtime Error</h2>
+    <button onclick="nonExistentFunctionCall()">Trigger JavaScript Crash</button>
+  </div>
+</body>
+</html>

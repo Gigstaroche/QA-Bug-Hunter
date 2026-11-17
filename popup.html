@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>QA Bug Hunter</title>
+  <link rel="icon" type="image/png" href="icons/icon32.png">
+  <style>
+    body {
+      width: 280px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #ffffff;
+      color: #0f172a;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .header h2 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .badge {
+      background: #ef4444;
+      color: white;
+      font-size: 10px;
+      font-weight: bold;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .section-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #64748b;
+      margin-top: 14px;
+      margin-bottom: 8px;
+    }
+    .toggle-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      font-size: 13px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .info {
+      margin-top: 14px;
+      font-size: 11px;
+      color: #64748b;
+      line-height: 1.4;
+      background: #f8fafc;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span style="font-size: 22px;">🐞</span>
+    <div>
+      <h2>QA Bug Hunter</h2>
+      <span class="badge">ACTIVE</span>
+    </div>
+  </div>
+
+  <div class="section-title">Automated Detectors</div>
+
+  <div class="toggle-row">
+    <span>🛒 Cart Math Auditor</span>
+    <input type="checkbox" id="toggleMath" checked>
+  </div>
+  <div class="toggle-row">
+    <span>📝 Leaked Code / NaN</span>
+    <input type="checkbox" id="toggleContent" checked>
+  </div>
+  <div class="toggle-row">
+    <span>🖼️ Broken Images (404)</span>
+    <input type="checkbox" id="toggleMedia" checked>
+  </div>
+  <div class="toggle-row">
+    <span>👓 High-Contrast Eye Aid</span>
+    <input type="checkbox" id="toggleContrast" checked>
+  </div>
+
+  <div class="info">
+    💡 <strong>How it works:</strong> Browse or test any page naturally. When a bug is found, click the floating <strong>🐞 badge</strong> at the bottom-right of the page to inspect and copy the report!
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
