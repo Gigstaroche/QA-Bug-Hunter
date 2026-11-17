@@ -1,7 +1,7 @@
 /**
  * QA Bug Hunter & Visual Assistant - Content Script
  * Fully integrated with uTest Bug Reporting Guidelines & Format.
- * Supports: Math audits, Broken images, "No Image Found" Placeholders, Dead links, Runtime Crashes.
+ * Filtered to ignore 3rd-party tracking pixels (Bing, Google, Facebook) and only highlight real user-visible images.
  */
 
 (function () {
@@ -35,6 +35,7 @@
     if (path.includes('checkout')) return 'Checkout';
     if (path.includes('account') || path.includes('login') || path.includes('profile')) return 'Account';
     if (path.includes('search')) return 'Search Results Page';
+    if (path.includes('contact') || path.includes('customer-service')) return 'Customer Service';
     if (path.length <= 1 || path === '/en' || path === '/en/') return 'Homepage';
     return 'Catalog Page';
   }
@@ -44,10 +45,29 @@
   const OS_NAME = getDeviceInfo();
   const PAGE_AREA = getPageArea();
 
+  // Domains used by advertising & tracking beacons that are NOT user-visible bugs
+  const TRACKING_DOMAINS = [
+    'bat.bing.com',
+    'google-analytics.com',
+    'doubleclick.net',
+    'facebook.com',
+    'analytics',
+    'pixel',
+    'criteo',
+    'hotjar',
+    'clarity.ms',
+    'demdex.net',
+    'omtrdc.net'
+  ];
+
   // -------------------------------------------------------------
   // 1. Crash & Runtime Error Listener
   // -------------------------------------------------------------
   window.addEventListener('error', (event) => {
+    // Ignore third party tracker errors
+    const file = event.filename || '';
+    if (TRACKING_DOMAINS.some(d => file.includes(d))) return;
+
     addBug({
       type: 'Crash',
       area: PAGE_AREA,
@@ -59,32 +79,14 @@
         `Observe the browser response`
       ],
       expected: 'Page scripts should execute smoothly without unhandled runtime exceptions.',
-      actual: `An unhandled JavaScript error occurred: "${event.message}" at ${event.filename || 'script'}:${event.lineno || 0}.`,
+      actual: `An unhandled JavaScript error occurred: "${event.message}" at ${file || 'script'}:${event.lineno || 0}.`,
       element: null,
       severity: 'Critical'
     });
   });
 
-  window.addEventListener('unhandledrejection', (event) => {
-    addBug({
-      type: 'Crash',
-      area: PAGE_AREA,
-      title: 'Unhandled Promise Rejection occurs on page',
-      steps: [
-        `Open Google Chrome and navigate to: ${BASE_URL}`,
-        `Navigate to: ${CURRENT_URL}`,
-        `Perform normal page interactions`,
-        `Observe page execution`
-      ],
-      expected: 'Asynchronous network operations should resolve without unhandled rejections.',
-      actual: `An unhandled promise rejection occurred: "${String(event.reason)}"`,
-      element: null,
-      severity: 'High'
-    });
-  });
-
   // -------------------------------------------------------------
-  // 2. Math & E-Commerce Auditor (Option A)
+  // 2. Math & E-Commerce Auditor
   // -------------------------------------------------------------
   function checkCartMath() {
     if (!state.settings.checkMath) return;
@@ -186,7 +188,7 @@
   }
 
   // -------------------------------------------------------------
-  // 4. Media & Placeholder Images (Option B) & Dead Links
+  // 4. Media & Dead Links (Ignoring invisible tracking pixels)
   // -------------------------------------------------------------
   function checkMediaAndLinks() {
     if (state.settings.checkMedia) {
@@ -196,26 +198,41 @@
         const src = (img.src || '').toLowerCase();
         const alt = (img.alt || '').toLowerCase();
 
-        // Check 1: 404 / broken load
+        // 1. Completely ignore advertising / tracking pixels (bat.bing.com, doubleclick, etc.)
+        if (TRACKING_DOMAINS.some((d) => src.includes(d))) return;
+
+        // 2. Ignore 0x0 or 1x1 hidden pixels (Only test real images regular users can see)
+        const rect = img.getBoundingClientRect();
+        const style = window.getComputedStyle(img);
+        const isHidden =
+          style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          style.opacity === '0' ||
+          (img.offsetWidth <= 8 && img.offsetHeight <= 8) ||
+          (rect.width <= 8 && rect.height <= 8);
+
+        if (isHidden) return;
+
+        // Check A: Real visible image that failed to load (404)
         if (img.complete && img.naturalWidth === 0 && img.src && !img.src.startsWith('data:')) {
           addBug({
             type: 'Visual',
             area: PAGE_AREA,
-            title: 'Image fails to load and displays as broken icon',
+            title: 'Visible image fails to load and renders as broken icon',
             steps: [
               `Open Google Chrome and navigate to: ${BASE_URL}`,
               `Navigate to: ${CURRENT_URL}`,
               `Scroll down to the image area`,
-              `Observe the rendered product/banner image`
+              `Observe the rendered image on screen`
             ],
-            expected: 'The image should load and render properly without breaking.',
-            actual: `Image asset failed to load (HTTP 404 / broken src): ${img.src.substring(0, 80)}...`,
+            expected: 'The visible image should load and render properly without breaking.',
+            actual: `The image failed to load (HTTP 404 / broken file): ${img.src.substring(0, 80)}...`,
             element: img,
             severity: 'Medium'
           });
         }
 
-        // Check 2: Fallback Placeholder image (Option B)
+        // Check B: Fallback Placeholder image ("No image found")
         if (src.includes('no-image') || src.includes('placeholder') || alt.includes('no image') || alt.includes('placeholder')) {
           const cardTitle = img.closest('.product, [class*="card"], [class*="item"]')?.innerText?.split('\n')[0] || 'Product';
           addBug({
@@ -334,7 +351,7 @@
         <div class="qa-drawer-body">
           ${
             bugCount === 0
-              ? '<p class="qa-empty">No issues found on this page. Continue exploring!</p>'
+              ? '<p class="qa-empty">No user-visible bugs found on this page. Continue exploring!</p>'
               : state.bugs
                   .map(
                     (b, i) => `
@@ -365,7 +382,7 @@
                 </div>
 
                 <div class="qa-card-actions">
-                  ${b.element ? `<button class="qa-btn-locate" data-index="${i}">📍 Locate</button>` : ''}
+                  ${b.element ? `<button class="qa-btn-locate" data-index="${i}">🎯 Locate on Screen</button>` : ''}
                   <button class="qa-btn-copy-title" data-index="${i}">Copy Title</button>
                   <button class="qa-btn-copy-steps" data-index="${i}">Copy Steps</button>
                   <button class="qa-btn-copy-all" data-index="${i}" style="background: #2563eb; color: #fff;">📋 Copy Full Report</button>
@@ -392,7 +409,7 @@
         if (b && b.element) {
           b.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           b.element.classList.add('qa-flash-highlight');
-          setTimeout(() => b.element.classList.remove('qa-flash-highlight'), 3000);
+          setTimeout(() => b.element.classList.remove('qa-flash-highlight'), 3500);
         }
       };
     });
