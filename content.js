@@ -1,7 +1,8 @@
 /**
- * QA Bug Hunter & Visual Assistant - Content Script v1.6.0
+ * QA Bug Hunter & Visual Assistant - Content Script v1.7.0
  * Features:
- * - 🚫 Eliminates Lazy-Loading false positives (supports lozad, lazysizes, data-src, viewport checks)
+ * - 🛡️ Strict Deduplication: Guarantees no duplicate/identical bug cards
+ * - 🚫 Eliminates Lazy-Loading false positives
  * - 🚫 Ignores href="#" false alarms
  * - 🛡️ Built-in Out-of-Scope (OOS) Shield
  * - 🛒 Cart Math & Financial Auditor
@@ -132,7 +133,7 @@
   });
 
   // -------------------------------------------------------------
-  // 2. Media & Broken Images (IMMUNE TO LAZY-LOADING)
+  // 2. Media & Broken Images
   // -------------------------------------------------------------
   function checkMediaBugs() {
     document.querySelectorAll('img').forEach((img) => {
@@ -141,19 +142,12 @@
       const src = (img.currentSrc || img.src || '').toLowerCase();
       const alt = (img.alt || '').toLowerCase();
 
-      // Ignore tracking beacons
       if (TRACKING_DOMAINS.some((d) => src.includes(d))) return;
 
-      // LAZY-LOADING FILTER:
-      // If image uses lazy-loading (data-src, class lazyload, loading="lazy"),
-      // and hasn't started loading yet, DO NOT flag it!
       const hasLazyAttr = img.getAttribute('data-src') || img.getAttribute('data-lazy') || img.classList.contains('lazyload') || img.getAttribute('loading') === 'lazy';
       const isRootUrl = src === BASE_URL.toLowerCase() || src === (BASE_URL + '/').toLowerCase() || src === '';
 
-      // If src is just root URL or data-src hasn't loaded yet, it's lazy-loading in progress, NOT a bug!
-      if (isRootUrl || (hasLazyAttr && !img.complete)) {
-        return;
-      }
+      if (isRootUrl || (hasLazyAttr && !img.complete)) return;
 
       const rect = img.getBoundingClientRect();
       const style = window.getComputedStyle(img);
@@ -166,15 +160,7 @@
 
       if (isHidden) return;
 
-      // Check A: "No image found" / placeholder graphic
-      const isPlaceholder =
-        src.includes('no-image') ||
-        src.includes('noimage') ||
-        src.includes('placeholder') ||
-        alt.includes('no image') ||
-        alt.includes('placeholder');
-
-      if (isPlaceholder) {
+      if (src.includes('no-image') || src.includes('noimage') || src.includes('placeholder') || alt.includes('no image')) {
         const name = getNearbyName(img) || 'Product';
         addBug({
           type: 'Visual',
@@ -194,7 +180,6 @@
         return;
       }
 
-      // Check B: Genuine broken image (Must have valid image extension and be in view or error event)
       const hasImageExtension = /\.(jpg|jpeg|png|webp|gif|svg|avif)(\?.*)?$/i.test(src);
       const isInViewport = rect.top < (window.innerHeight + 200) && rect.bottom > -200;
 
@@ -246,7 +231,7 @@
           steps: [
             `Open Google Chrome on Windows 11 and navigate to: ${BASE_URL}`,
             `Add items to cart and navigate to the cart page: ${CURRENT_URL}`,
-            `Review the breakdown under order summary (Subtotal: $${subtotal}, Discount: -$${discount}, Shipping: $${shipping})`,
+            `Review the breakdown under order summary (Subtotal: $${subtotal.toFixed(2)}, Discount: -$${discount.toFixed(2)}, Shipping: $${shipping.toFixed(2)})`,
             `Observe the displayed Total`
           ],
           expected: `The Total should equal Subtotal minus Discounts plus Shipping ($${expectedTotal.toFixed(2)}).`,
@@ -259,7 +244,7 @@
   }
 
   // -------------------------------------------------------------
-  // 4. Dead Links Checker (No false alarms)
+  // 4. Dead Links Checker
   // -------------------------------------------------------------
   function checkDeadLinks() {
     document.querySelectorAll('a[href]').forEach((a) => {
@@ -315,10 +300,11 @@
   }
 
   // -------------------------------------------------------------
-  // Bug Registry
+  // Bug Registry (STRICT DEDUPLICATION BY TITLE & TYPE)
   // -------------------------------------------------------------
   function addBug(bug) {
-    const isDup = state.bugs.some((b) => b.title === bug.title && b.actual === bug.actual);
+    // Deduplicate by type and title alone: Never allow identical bugs!
+    const isDup = state.bugs.some((b) => b.type === bug.type && b.title === bug.title);
     if (isDup) return;
 
     bug.utestFormattedTitle = `${OS_NAME} - ${bug.area} - ${bug.title}`;
